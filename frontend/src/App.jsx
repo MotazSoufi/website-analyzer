@@ -15,9 +15,13 @@ function isKnown(value) {
   return true;
 }
 
-// removes unknown items from the list
+//removes unknown items from the list
 function cleanList(items) {
   return (items || []).filter(isKnown);
+}
+
+function formatDate(iso) {
+  return iso ? new Date(iso).toLocaleString() : "";
 }
 
 function Card({ title, wide, children }) {
@@ -62,7 +66,7 @@ function Sources({ sources }) {
   );
 }
 
-function Report({ report, darkLogo, setDarkLogo }) {
+function Report({ report, darkLogo, setDarkLogo, onRefresh }) {
   const instagram = report.instagram && !report.instagram.failed ? report.instagram : null;
   const youtube = report.youtube && !report.youtube.failed ? report.youtube : null;
   const branches = report.branches || [];
@@ -95,6 +99,13 @@ function Report({ report, darkLogo, setDarkLogo }) {
           <a href={report.url} target="_blank" rel="noreferrer">{report.url}</a>
         </div>
       </header>
+
+      {report.cached_at && (
+        <div className="notice">
+          Saved report from <strong>{formatDate(report.cached_at)}</strong>.{" "}
+          <button className="link-button" onClick={onRefresh}>Analyze again</button>
+        </div>
+      )}
 
       {report.mode === "archive" && (
         <div className='notice'>
@@ -300,11 +311,43 @@ function App() {
   const [error, setError] = useState("");
   const [steps, setSteps] = useState([]);
   const [darkLogo, setDarkLogo] = useState(false);
+  const [tab, setTab] = useState("analyze");
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
-  async function handleAnalyze(e) {
+  function handleSubmit(e) {
     e.preventDefault();
-    if (!url.trim() || loading) return;
+    runAnalysis(false);
+  }
 
+  async function loadHistory() {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`${API}/history`);
+      setHistory(await res.json());
+    } catch {
+      setHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function openHistoryItem(id) {
+    const res = await fetch(`${API}/history/${id}`);
+    if (!res.ok) return;
+    const saved = await res.json();
+    setReport(saved);
+    setSteps([]);
+    setError("");
+    setDarkLogo(false);
+    setTab("analyze");
+  }
+
+  async function runAnalysis(refresh = false, targetUrl = url) {
+    if (!targetUrl.trim() || loading) return;
+
+    setTab("analyze");
+    setUrl(targetUrl);
     setLoading(true);
     setError("");
     setReport(null);
@@ -315,7 +358,7 @@ function App() {
       const startRes = await fetch(`${API}/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: targetUrl, refresh }),
       });
       const startData = await startRes.json();
       if (!startRes.ok) throw new Error(startData.detail || "Could not start the analysis");
@@ -344,7 +387,26 @@ return (
   <div className="container">
     <h1>Website Analyzer</h1>
 
-    <form className="search" onSubmit={handleAnalyze}>
+    <nav className='tabs'>
+      <button className={tab === "analyze" ? "active" : ""} onClick={() => setTab("analyze")}>
+        New analysis
+      </button>
+      <button
+        className={tab === "history" ? "active" : ""}
+        onClick={() => {
+          setTab("history");
+          loadHistory();
+        }}
+      >
+        History
+      </button>
+    </nav>
+
+    {tab === "analyze" && (
+      <>
+    
+
+    <form className="search" onSubmit={handleSubmit}>
       <input
         type="text"
         placeholder='Enter a website, e.g. example.com'
@@ -370,8 +432,40 @@ return (
     )}
 
     {error && <p className="error">{error}</p>}
-    {report && <Report report={report} darkLogo={darkLogo} setDarkLogo={setDarkLogo} />}
+    {report && (
+      <Report 
+        report={report}
+        darkLogo={darkLogo}
+        setDarkLogo={setDarkLogo}
+        onRefresh={() => runAnalysis(true, report.url)}
+      />
+    )}
+    </>
+    )}
 
+    {tab === "history" && (
+      <div className='history'>
+        {historyLoading && <p>Loading...</p>}
+        {!historyLoading && history.length === 0 && (
+          <p className='missing'>No saved reports yet.</p>
+        )}
+        <ul>
+          {history.map((item) => (
+            <li key={item.id} onClick={() => openHistoryItem(item.id)}>
+              {item.logo_url && (
+                <img src={item.logo_url} alt="" onError={(e) => (e.target.style.display = "none")} />
+              )}
+              <div className='history-info'>
+                <strong>{isKnown(item.brand_name) ? item.brand_name : item.domain}</strong>
+                <span>{item.domain}</span>
+              </div>
+              <span className='history-date'>{formatDate(item.created_at)}</span>
+              <span className='mode'>{item.mode}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    )}
   </div>
 );
 }
