@@ -4,3 +4,4 @@ screenshots/
 __pycache__/
 report.json
 instagram_session
+reports.db

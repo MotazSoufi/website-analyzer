@@ -4,8 +4,10 @@ from pydantic import BaseModel
 from main_agent import analyze_website
 import uuid
 import threading
+from database import setup_database, save_report, find_cached_report, list_history, get_report
 
 app = FastAPI()
+setup_database()
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,6 +18,7 @@ app.add_middleware(
 
 class AnalyzeRequest(BaseModel):
     url: str
+    refresh: bool = False
 
 @app.post("/analyze")
 def analyze(request: AnalyzeRequest):
@@ -39,6 +42,18 @@ def start_job(request: AnalyzeRequest):
     if not url.startswith("http"):
         url = "https://" + url
 
+    if not request.refresh:
+        cached = find_cached_report(url)
+        if cached:
+            job_id = uuid.uuid4().hex
+            jobs[job_id] = {
+                "steps": ["Found a saved report from the last 7 days."],
+                "done": True,
+                "report": cached,
+                "error": None,
+            }
+            return {"job_id": job_id}
+
     job_id = uuid.uuid4().hex
     jobs[job_id] = {"steps": [], "done": False, "report": None, "error": None}
 
@@ -47,7 +62,11 @@ def start_job(request: AnalyzeRequest):
 
     def worker():
         try:
-            jobs[job_id]["report"] = analyze_website(url, on_progress)
+            report = analyze_website(url, on_progress)
+            if not report.get("failed_agents"):
+                report["history_id"] = save_report(url, report)
+            jobs[job_id]["report"] = report
+
         except Exception as e:
             jobs[job_id]["error"] = f"Could not analyze website: {e}"
         finally:
@@ -62,4 +81,17 @@ def get_job(job_id: str):
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job       
+    return job  
+
+@app.get("/history")
+def history():
+    """Short list of saved reports, newest first."""
+    return list_history()
+
+@app.get("/history/{report_id}")
+def history_item(report_id: int):
+    """One full saved report."""
+    report = get_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return report     
